@@ -1,0 +1,24 @@
+{
+    "root": true,
+    "env": {
+        "node": true,
+        "es2021": true
+    },
+    "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+    "overrides": [],
+    "parser": "@typescript-eslint/parser",
+    "parserOptions": {
+        "ecmaVersion": "latest",
+        "sourceType": "module"
+    },
+    "plugins": ["@typescript-eslint"],
+    "rules": {
+        // "no-console": "warn",
+        "@typescript-eslint/no-explicit-any":"off",
+        "no-useless-catch":"off",
+        "no-self-compare": "error",
+        "no-useless-return": "error",
+        "no-mixed-spaces-and-tabs": "error",
+        "max-len": ["error", { "code": 250, "tabWidth": 4, "comments": 150 }]
+    }
+}

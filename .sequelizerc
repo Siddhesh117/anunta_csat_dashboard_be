@@ -1,0 +1,11 @@
+const path = require('path');
+
+/*
+when creating a migration script or a seed file use the src path (creates a .js file we should convert to .ts file)
+when executing sequelize requires .js files so we change/replace the path back to src.
+ */
+module.exports = {
+    config: path.resolve('dist', 'database', 'config', 'database.js'),
+    // 'seeders-path': path.resolve('dist', 'database', 'seeders'),
+    'migrations-path': path.resolve('dist', 'database', 'migrations')
+};
