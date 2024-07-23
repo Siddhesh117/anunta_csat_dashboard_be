@@ -1,3 +1,4 @@
+import moment from 'moment-timezone';
 import { FeedbackStatusConstants } from '../../constants/dashboardDBConstant';
 import sequelize from '../../database/config/sequelize';
 import WinstonLogger from '../../utils/WinstonLoggerUtil';
@@ -9,6 +10,11 @@ interface DashboardDataProps {
     userFeedback?: string | null;
     actionStatus?: string | null;
     userName?: string | null;
+    unsatisfiedNUsers?: number | null;
+    fromDate?: string | null;
+    toDate?: string | null;
+    users?: string | null;
+    searchValue?: string | null;
 }
 
 interface FeedbackStat {
@@ -38,14 +44,65 @@ const feedbackTemplate: FeedbackStat[] = [
 ];
 
 /* Helper Functions */
+
+// Utility function to parse and clean a string or array input
+const parseStringOrArray = (input: string | string[]): string[] => {
+    let resultArray: string[] = [];
+
+    if (typeof input === 'string') {
+        // Clean and parse the input string
+        let cleanedString = input.replace(/^\[|\]$/g, ''); // Remove brackets
+        try {
+            resultArray = JSON.parse(`[${cleanedString}]`);
+            if (!Array.isArray(resultArray)) {
+                throw new Error('Parsed input is not an array');
+            }
+        } catch {
+            resultArray = cleanedString
+                .split(',')
+                .map((value) => value.trim())
+                .filter((value) => value);
+        }
+    } else if (Array.isArray(input)) {
+        resultArray = input;
+    }
+
+    return resultArray;
+};
+
 const generateFiltersAndReplacements = (data: DashboardDataProps): FilterResult => {
     const filters: string[] = [];
     const replacements: { [key: string]: any } = {};
 
-    if (data?.client) {
-        filters.push(`client_name = :client`);
-        replacements.client = data.client;
+    let clientArray: string[] = [];
+    let usersArray: string[] = [];
+
+    if (data.client) {
+        clientArray = parseStringOrArray(data.client);
     }
+
+    if (clientArray.length > 0) {
+        // Create placeholders for the client values
+        const clientPlaceholders = clientArray.map((_, index) => `:client${index}`).join(', ');
+        filters.push(`client_name IN (${clientPlaceholders})`);
+        clientArray.forEach((client, index) => {
+            replacements[`client${index}`] = client;
+        });
+    }
+
+    if (data.users) {
+        usersArray = parseStringOrArray(data.users);
+    }
+
+    if (usersArray.length > 0) {
+        // Create placeholders for the user_name values
+        const clientPlaceholders = usersArray.map((_, index) => `:users${index}`).join(', ');
+        filters.push(`user_name IN (${clientPlaceholders})`);
+        usersArray.forEach((users, index) => {
+            replacements[`users${index}`] = users;
+        });
+    }
+
     if (data?.location) {
         filters.push(`user_location = :location`);
         replacements.location = data.location;
@@ -68,14 +125,56 @@ const generateFiltersAndReplacements = (data: DashboardDataProps): FilterResult 
         replacements.userName = data.userName;
     }
 
+    // Handle date range filtering with validation
+    if (data?.fromDate && data?.toDate) {
+        console.log('data.toDate', data.toDate);
+
+        // Parse dates using the correct format
+        const fromDate = moment(data.fromDate, 'DD-MM-YYYY').format('YYYY-MM-DD');
+        const toDate = moment(data.toDate, 'DD-MM-YYYY').format('YYYY-MM-DD');
+        console.log(fromDate, toDate);
+
+        if (moment(fromDate, 'YYYY-MM-DD').isValid() && moment(toDate, 'YYYY-MM-DD').isValid()) {
+            filters.push(`feedback_date BETWEEN :fromDate AND :toDate`);
+            replacements.fromDate = fromDate;
+            replacements.toDate = toDate;
+        }
+    }
+
+    // Handle searchValue filtering across multiple fields
+    if (data?.searchValue) {
+        const searchValue = `%${data.searchValue}%`;
+        const searchFields = [
+            'client_name',
+            'user_name',
+            'host_name',
+            'user_feedback',
+            'user_comments',
+            'incident_number',
+            'action_status',
+            'delivery_group',
+            'user_location',
+            'department'
+        ];
+        const searchFilters = searchFields
+            .map((field) => `${field} LIKE :searchValue`)
+            .join(' OR ');
+        filters.push(`(${searchFilters})`);
+        replacements.searchValue = searchValue;
+    }
+
     return { filters, replacements };
 };
 
 // Function to merge feedback stats with the template
-const mergeWithTemplate = (feedbackStats: FeedbackStat[]): FeedbackStat[] => {
+const mergeWithTemplate = (feedbackStats: FeedbackStat[][]): FeedbackStat[] => {
+    // Flatten the feedbackStats array
+    const flattenedFeedbackStats = feedbackStats.flat();
+    console.log('Flattened feedbackStats', flattenedFeedbackStats);
+
     // Create a map from feedback stats for quick lookup
     const feedbackMap = new Map<string, FeedbackStat>();
-    feedbackStats.forEach((stat) => feedbackMap.set(stat.name, stat));
+    flattenedFeedbackStats.forEach((stat) => feedbackMap.set(stat.name, stat));
 
     // Merge results with the template
     const mergedFeedbackStats = feedbackTemplate.map((template) => {
@@ -99,7 +198,7 @@ const getFeedbackStats = async (data: DashboardDataProps): Promise<FeedbackStat[
             FORMAT((COUNT(*) * 100.0 / (SELECT COUNT(*) FROM csat_sample)), 2) AS percentage
         FROM 
             csat_sample
-             `;
+        `;
 
         // Generate filters and replacements
         const { filters, replacements } = generateFiltersAndReplacements(data);
@@ -116,16 +215,17 @@ const getFeedbackStats = async (data: DashboardDataProps): Promise<FeedbackStat[
                 WHEN user_feedback = 'Excellent' THEN 'Highly Satisfied'
                 ELSE user_feedback 
             END
-             `;
+        `;
 
         // Execute the query
-        const [feedbackStats] = (await sequelize.query(query, {
+        const feedbackStats = (await sequelize.query(query, {
             replacements
         })) as FeedbackStat[] | any;
 
         // Merge the query results with the template
         return mergeWithTemplate(feedbackStats);
     } catch (error) {
+        console.error('Error fetching feedback stats:', error);
         throw error;
     }
 };
@@ -134,16 +234,39 @@ const getNetSatisfactionScore = async (data: DashboardDataProps) => {
     try {
         // Base query
         let query = `
-            SELECT 
-                (SUM(CASE WHEN user_feedback = 'Highly Satisfied' THEN 1 ELSE 0 END)
-                 + SUM(CASE WHEN user_feedback = 'Satisfied' THEN 1 ELSE 0 END))
-                - (SUM(CASE WHEN user_feedback = 'Dissatisfied' THEN 1 ELSE 0 END)
-                   + SUM(CASE WHEN user_feedback = 'Highly Dissatisfied' THEN 1 ELSE 0 END)) AS result
-            FROM 
-                csat_sample
-            WHERE 
-                user_feedback IN ('Highly Satisfied', 'Satisfied', 'Dissatisfied', 'Highly Dissatisfied')
+SELECT 
+    (( 
+        (SUM(CASE WHEN user_feedback = 'Highly Satisfied' THEN 1 ELSE 0 END) 
+         + SUM(CASE WHEN user_feedback = 'Satisfied' THEN 1 ELSE 0 END)) * 100.0 
+        / NULLIF(SUM(
+            CASE WHEN user_feedback IN ('Highly Satisfied', 'Satisfied', 'Dissatisfied', 'Highly Dissatisfied', 'Neither Satisfied / Nor Dissatisfied') 
+            THEN 1 ELSE 0 END
+        ), 0)
+    ) - (
+        (SUM(CASE WHEN user_feedback = 'Highly Dissatisfied' THEN 1 ELSE 0 END) 
+         + SUM(CASE WHEN user_feedback = 'Dissatisfied' THEN 1 ELSE 0 END)) * 100.0 
+        / NULLIF(SUM(
+            CASE WHEN user_feedback IN ('Highly Satisfied', 'Satisfied', 'Dissatisfied', 'Highly Dissatisfied', 'Neither Satisfied / Nor Dissatisfied') 
+            THEN 1 ELSE 0 END
+        ), 0)
+    )) AS result
+FROM 
+    csat_sample
+WHERE 
+    user_feedback IN ('Highly Satisfied', 'Satisfied', 'Dissatisfied', 'Highly Dissatisfied')
+
         `;
+        // let query = `
+        //     SELECT
+        //         (SUM(CASE WHEN user_feedback = 'Highly Satisfied' THEN 1 ELSE 0 END)
+        //          + SUM(CASE WHEN user_feedback = 'Satisfied' THEN 1 ELSE 0 END))
+        //         - (SUM(CASE WHEN user_feedback = 'Dissatisfied' THEN 1 ELSE 0 END)
+        //            + SUM(CASE WHEN user_feedback = 'Highly Dissatisfied' THEN 1 ELSE 0 END)) AS result
+        //     FROM
+        //         csat_sample
+        //     WHERE
+        //         user_feedback IN ('Highly Satisfied', 'Satisfied', 'Dissatisfied', 'Highly Dissatisfied')
+        // `;
 
         // Generate filters and replacements
         const { filters, replacements } = generateFiltersAndReplacements(data);
@@ -253,9 +376,9 @@ const getIssueReportedCountByDeliveryGroup = async (data: DashboardDataProps) =>
     }
 };
 
-export const getUnsatisfiedUserList = async () => {
+export const getUnsatisfiedUserList = async (data: DashboardDataProps) => {
     try {
-        const query = `
+        let query = `
             SELECT 
                 client_name,
                 user_name,
@@ -267,7 +390,19 @@ export const getUnsatisfiedUserList = async () => {
                 csat_sample
             WHERE 
                 user_feedback IN ('Highly Dissatisfied', 'Dissatisfied')
-            GROUP BY 
+       `;
+
+        // Generate filters and replacements
+        const { filters, replacements } = generateFiltersAndReplacements(data);
+
+        // Append filters to the query
+        if (filters.length > 0) {
+            query += ` AND ${filters.join(' AND ')}`;
+        }
+
+        // Add GROUP BY and ORDER BY clauses
+        query += `
+          GROUP BY 
                 client_name,
                 user_name,
                 delivery_group,
@@ -275,10 +410,17 @@ export const getUnsatisfiedUserList = async () => {
                 department
             ORDER BY 
                 negative_feedback_count DESC
-            LIMIT 25;
-       `;
+            LIMIT ${data.unsatisfiedNUsers ?? 25}
+      `;
 
-        const [result]: any = await sequelize.query(query);
+        // Log the final query for debugging
+        console.log('getUnsatisfiedUserList  Final Query:', query);
+        console.log('getUnsatisfiedUserList  Replacements:', replacements);
+
+        // Execute the query using Sequelize
+        const [result] = await sequelize.query(query, {
+            replacements
+        });
 
         return result;
     } catch (error: any) {
@@ -304,7 +446,7 @@ export const getDashboardData = async (data: DashboardDataProps) => {
             getNetSatisfactionScore(data),
             getIssueReportedCountByLocation(data),
             getIssueReportedCountByDeliveryGroup(data),
-            getUnsatisfiedUserList()
+            getUnsatisfiedUserList(data)
         ]);
 
         WinstonLogger.logger.log({
@@ -314,7 +456,7 @@ export const getDashboardData = async (data: DashboardDataProps) => {
 
         return {
             userFeedbackChartData,
-            netSatisfactionScore,
+            netSatisfactionScore: Number(parseFloat(netSatisfactionScore).toFixed(2)),
             issueReportedCountByLocation,
             issueReportedCountByDeliveryGroup,
             unsatisfiedUserList
@@ -418,6 +560,38 @@ export const getClientList = async () => {
     } catch (error: any) {
         WinstonLogger.logger.log({
             message: `${NAMESPACE} Error occurred while fetching the client list: ${error.message}`,
+            level: 'error'
+        });
+        throw error;
+    }
+};
+
+export const getUsersList = async () => {
+    try {
+        WinstonLogger.logger.log({
+            message: `${NAMESPACE} Attempting to fetch Users list.`,
+            level: 'info'
+        });
+
+        const query = `
+        SELECT DISTINCT user_name
+        FROM csat_sample
+        WHERE user_name IS NOT NULL
+        AND TRIM(user_name) <> ''
+        AND user_name <> 'undefined';
+       `;
+
+        const [result]: any = await sequelize.query(query);
+
+        WinstonLogger.logger.log({
+            message: `${NAMESPACE} Successfully fetched the Users list.`,
+            level: 'info'
+        });
+
+        return result;
+    } catch (error: any) {
+        WinstonLogger.logger.log({
+            message: `${NAMESPACE} Error occurred while fetching the Users list: ${error.message}`,
             level: 'error'
         });
         throw error;

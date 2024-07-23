@@ -10,7 +10,7 @@ const pool = new Sequelize({
     ...database[env as keyof typeof database],
     port: dbPort,
     dialect: 'mysql',
-    logging: false,
+    logging: true,
     dialectOptions: {
         connectTimeout: 40000
     },

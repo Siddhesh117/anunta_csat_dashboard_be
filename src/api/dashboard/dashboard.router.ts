@@ -5,6 +5,7 @@ const dashboardRouter = Router();
 
 dashboardRouter.get('/', dashboardController.getDashboardData);
 dashboardRouter.get('/client-list', dashboardController.getClientList);
+dashboardRouter.get('/users-list', dashboardController.getUsersList);
 dashboardRouter.get('/location-list', dashboardController.getLocationList);
 dashboardRouter.get('/delivery-group-list', dashboardController.getDeliveryGroupList);
 dashboardRouter.get('/graph-record-list', dashboardController.getSelectedGraphRecordList);
