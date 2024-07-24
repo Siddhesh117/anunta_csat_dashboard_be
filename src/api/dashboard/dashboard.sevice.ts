@@ -127,12 +127,9 @@ const generateFiltersAndReplacements = (data: DashboardDataProps): FilterResult 
 
     // Handle date range filtering with validation
     if (data?.fromDate && data?.toDate) {
-        console.log('data.toDate', data.toDate);
-
         // Parse dates using the correct format
         const fromDate = moment(data.fromDate, 'DD-MM-YYYY').format('YYYY-MM-DD');
         const toDate = moment(data.toDate, 'DD-MM-YYYY').format('YYYY-MM-DD');
-        console.log(fromDate, toDate);
 
         if (moment(fromDate, 'YYYY-MM-DD').isValid() && moment(toDate, 'YYYY-MM-DD').isValid()) {
             filters.push(`feedback_date BETWEEN :fromDate AND :toDate`);
@@ -170,7 +167,6 @@ const generateFiltersAndReplacements = (data: DashboardDataProps): FilterResult 
 const mergeWithTemplate = (feedbackStats: FeedbackStat[][]): FeedbackStat[] => {
     // Flatten the feedbackStats array
     const flattenedFeedbackStats = feedbackStats.flat();
-    console.log('Flattened feedbackStats', flattenedFeedbackStats);
 
     // Create a map from feedback stats for quick lookup
     const feedbackMap = new Map<string, FeedbackStat>();
@@ -412,10 +408,6 @@ export const getUnsatisfiedUserList = async (data: DashboardDataProps) => {
                 negative_feedback_count DESC
             LIMIT ${data.unsatisfiedNUsers ?? 25}
       `;
-
-        // Log the final query for debugging
-        console.log('getUnsatisfiedUserList  Final Query:', query);
-        console.log('getUnsatisfiedUserList  Replacements:', replacements);
 
         // Execute the query using Sequelize
         const [result] = await sequelize.query(query, {
